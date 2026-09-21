@@ -37,6 +37,9 @@ local function perform_request(args)
         method = args.method or "GET",
         headers = args.headers or {},
         sink = args.sink or ltn12.sink.table(response_body),
+        -- certificate = self.client_cert,  -- Certificat client
+        -- private_key = self.client_key,    -- Clé privée
+        -- verify = "peer",   
         timeout = args.timeout or 10
     }
     
@@ -94,9 +97,9 @@ function KomgaAPI:new(base_url, api_key)
 end
 
 -- Create the request headers
-function KomgaAPI:get_headers()
+function KomgaAPI:get_headers(accept_header)
     local headers = {
-        ["Accept"] = "application/json",
+        ["Accept"] = accept_header or "application/json",
         ["Content-Type"] = "application/json"
     }
     if self.api_key and self.api_key ~= "" then
@@ -108,9 +111,9 @@ function KomgaAPI:get_headers()
 end
 
 -- Helper to perform a synchronized HTTP request
-function KomgaAPI:request(path, method, body_data)
+function KomgaAPI:request(path, method, body_data, accept_header)
     local url = self.base_url .. path
-    local headers = self:get_headers()
+    local headers = self:get_headers(accept_header)
     
     local post_data = nil
     if body_data then
@@ -173,6 +176,38 @@ function KomgaAPI:search_books(filename, series_id)
         query = query .. "&series_id=" .. escape_uri(series_id)
     end
     return self:request("/api/v1/books?" .. query)
+end
+
+-- Retrieve book manifest
+function KomgaAPI:get_book_manifest(book_id)
+    local manifest, err = self:request("/api/v1/books/" .. book_id .. "/manifest/epub", "GET", nil, "application/webpub+json")
+    if not manifest then
+        return nil, err
+    end
+    return manifest
+end
+
+-- Retrieve book progression
+function KomgaAPI:get_book_progression(book_id)
+    local progression, err = self:request("/api/v1/books/" .. book_id .. "/progression", "GET", nil, "application/vnd.readium.progression+json")
+    if not progression then
+        return nil, err
+    end
+    return progression
+end
+
+-- Mark book progression
+function KomgaAPI:mark_book_progression(book_id, progression)
+    return self:request("/api/v1/books/" .. book_id .. "/progression", "PUT", progression)
+end
+
+-- Retrieve book details
+function KomgaAPI:get_book_pages_count(book_id)
+    local book, err = self:request("/api/v1/books/" .. book_id)
+    if not book then
+        return nil, err
+    end
+    return book.media.pagesCount
 end
 
 -- Retrieve user progress for a book

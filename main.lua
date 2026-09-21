@@ -371,14 +371,13 @@ function KomgaPlugin:onReaderReady()
             
             local current_filepath = self.ui.document and self.ui.document.file
             local book_id = current_filepath and self.sync:getOrMatchBook(current_filepath)
-            
-            local NetworkMgr = require("ui/network/manager")
-            if NetworkMgr:isOnline() and book_id then
-                local success = self.sync:pullProgress(self.ui, interactive, false)
-                if success then
-                    logger.info("KomgaPlugin: Intercepted KOSync and pulled progress from Komga")
-                    return
-                end
+            if book_id then
+                local success = self.sync:pullProgress(self.ui, ensure_networking, interactive)
+                -- if success then
+                --     logger.info("KomgaPlugin: Intercepted KOSync and pulled progress from Komga")
+                --     return
+                -- end
+                return
             end
             
             -- Fallback to native KOSync when offline, not matched, or pull failed.
@@ -400,7 +399,8 @@ function KomgaPlugin:onReaderReady()
                 if book_id then
                     -- Pass ensure_networking = false to avoid duplicate willRerunWhenOnline prompts/queues.
                     -- The chained native KOSync will trigger prompts if needed and rerun when online, re-triggering us.
-                    self.sync:pushProgressForDocument(self.ui, not interactive, false)
+                    self.sync:pushProgress(self.ui, ensure_networking, interactive, on_suspend)
+                    return
                 end
             end
             
