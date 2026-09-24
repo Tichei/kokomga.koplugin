@@ -623,6 +623,9 @@ function KomgaSync:pullProgress(ui, ensure_networking, is_manual)
             end
 
             remote_page = self:GetPosFromRemoteProgression(book_id, remote_progression)
+            if not remote_page then
+                return false
+            end
 
             -- End Get progression
         end
@@ -708,7 +711,7 @@ function KomgaSync:GetPosFromRemoteProgression(book_id, remote_progression)
         logger.err("[Komga Sync] Get manifest failed: ", tostring(err))
         return nil
     end
-    
+
     -- find resource index
     local index
     for i, resource in ipairs(manifest.readingOrder) do
@@ -719,6 +722,10 @@ function KomgaSync:GetPosFromRemoteProgression(book_id, remote_progression)
     end
 
     logger.info("KomgaSync: found resource index ", index)
+    if not index then
+        logger.info("KomgaSync: readingOrder", manifest.readingOrder)
+        return nil
+    end
 
     -- compute pos from remote progression
     local pageCount = doc:getPageCount()
@@ -834,12 +841,14 @@ function KomgaSync:GetLocalProgression(book_id)
         "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
         dt.year, dt.month, dt.day, dt.hour, dt.min, dt.sec, 0)
 
+
+    -- kosync is nil when doing automatic sync
     local Device = require("device")
     local PluginLoader = require("pluginloader")
     local kosync = PluginLoader:getPluginInstance("kosync")
 
-    local chosen_device_name = kosync.settings.kosync_hostname or Device.model
-    local device_id = kosync.device_id
+    local chosen_device_name = (kosync and kosync.settings.kosync_hostname) or Device.model
+    local device_id = (kosync and kosync.device_id) or "" 
 
     local progressionPayload = {
         device = {id=device_id, name=chosen_device_name},
