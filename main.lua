@@ -369,20 +369,16 @@ function KomgaPlugin:onReaderReady()
         self.ui.kosync.getProgress = function(kosync_instance, ensure_networking, interactive)
             logger.info("KomgaPlugin: Intercepted KOSync:getProgress (ensure_networking=", ensure_networking, "interactive=", interactive, ")")
             
-            local current_filepath = self.ui.document and self.ui.document.file
-            local book_id = current_filepath and self.sync:getOrMatchBook(current_filepath)
-            if book_id then
-                local success = self.sync:pullProgress(self.ui, ensure_networking, interactive)
-                -- if success then
-                --     logger.info("KomgaPlugin: Intercepted KOSync and pulled progress from Komga")
-                --     return
-                -- end
-                return
+            if self.settings.use_komga_sync then 
+                local current_filepath = self.ui.document and self.ui.document.file
+                local book_id = current_filepath and self.sync:getOrMatchBook(current_filepath)
+                if book_id then
+                    local success = self.sync:pullProgress(book_id, ensure_networking, interactive)
+                    return
+                end
             end
-            
-            -- Fallback to native KOSync when offline, not matched, or pull failed.
-            -- This allows native KOSync to handle queueing and prompting, and once online,
-            -- it will trigger getProgress again, which we will intercept while online.
+
+            -- Fallback to native KOSync when not matched, or use_komga_sync == false.
             logger.info("KomgaPlugin: Falling back to native KOSync:getProgress")
             return self.orig_kosync_getProgress(kosync_instance, ensure_networking, interactive)
         end
@@ -393,13 +389,12 @@ function KomgaPlugin:onReaderReady()
         
         self.ui.kosync.updateProgress = function(kosync_instance, ensure_networking, interactive, on_suspend)
             logger.info("KomgaPlugin: Intercepted KOSync:updateProgress (ensure_networking=", ensure_networking, "interactive=", interactive, "on_suspend=", on_suspend, ")")
-            local current_filepath = self.ui.document and self.ui.document.file
-            if current_filepath then
-                local book_id = self.sync:getOrMatchBook(current_filepath)
+
+            if self.settings.use_komga_sync then 
+                local current_filepath = self.ui.document and self.ui.document.file
+                local book_id = current_filepath and self.sync:getOrMatchBook(current_filepath)
                 if book_id then
-                    -- Pass ensure_networking = false to avoid duplicate willRerunWhenOnline prompts/queues.
-                    -- The chained native KOSync will trigger prompts if needed and rerun when online, re-triggering us.
-                    self.sync:pushProgress(self.ui, ensure_networking, interactive, on_suspend)
+                    self.sync:pushProgress(book_id, ensure_networking, interactive, on_suspend)
                     return
                 end
             end

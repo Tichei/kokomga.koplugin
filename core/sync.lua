@@ -567,35 +567,22 @@ function KomgaSync:unlinkCurrentBook()
 end
 
 -- Sync progress from Komga
-function KomgaSync:pullProgress(ui, ensure_networking, interactive)
-    if not self.plugin.settings.use_komga_sync then return false end
-    if not self.plugin.api or not ui or not ui.document then return false end
-    
-    -- TODO : add debounce logic from kosync
+function KomgaSync:pullProgress(book_id, ensure_networking, interactive)
+    -- debounce logic from kosync
     local now = UIManager:getElapsedTimeSinceBoot()
     if not interactive and now - self.pull_timestamp <= API_CALL_DEBOUNCE_DELAY then
-        logger.dbg("KOSync: We've already pulled progress less than 25s ago!")
+        logger.warn("KomgaSync: We've already pulled progress less than 25s ago!")
         return
     end
 
     local doc = self.plugin.ui.document
-    local filepath = ui.document.file
-    if not filepath then return false end
-    
-    local book_id, err = self:getOrMatchBook(filepath)
     local _ = self.plugin.i18n._
     local T = self.plugin.i18n.T
-    
-    if not book_id then
-        if interactive then self.plugin:notify(_("Click 'Match' first."), "error") end
-        return false
-    end
-    
-    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:pullProgress(ui, ensure_networking, interactive) end) then
+        
+    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:pullProgress(book_id, ensure_networking, interactive) end) then
         return true
     end
 
-    -- if interactive then self.plugin:notify(_("Checking server progress..."), "info") end
     logger.info("KomgaSync: Executing pullProgress for book", book_id)
     
     local remote_page = nil 
@@ -628,16 +615,14 @@ function KomgaSync:pullProgress(ui, ensure_networking, interactive)
         if progress.completed then
             -- books can be marked as completed and have no progression at all
             remote_page = doc:getPageCount()
-
         else
             -- Get progression
-
             local remote_progression, err = self.plugin.api:get_book_progression(book_id)
             if not remote_progression then
-                logger.err("[Komga Sync] Get progression failed: ", tostring(err))
+                logger.err("KomgaSync: Get progression failed: ", tostring(err))
                 return false
             end
-            logger.info("[Komga Sync] Get progression", remote_progression)
+            logger.info("KomgaSync: Get progression", remote_progression)
 
             if type(remote_progression) ~= "table" then
                 logger.info("KomgaSync: Book found but no progress recorded on server (progress type is", type(remote_progression), ")")
@@ -648,17 +633,14 @@ function KomgaSync:pullProgress(ui, ensure_networking, interactive)
             if not remote_page then
                 return false
             end
-
-            -- End Get progression
         end
 
     else
         --fallback in case of fixed page formats
-
         remote_page = progress.page
     end
     
-    local current_page = ui.view and ui.view.state and ui.view.state.page or 1
+    local current_page = self.plugin.ui.view and self.plugin.ui.view.state and self.plugin.ui.view.state.page or 1
     
     if remote_page == current_page then
         if interactive then self.plugin:notify(_("Already at server progress"), "info") end
@@ -711,6 +693,27 @@ function KomgaSync:getLastProgress()
     end
 end
 
+function KomgaSync:getResourcePointers(index)
+    local doc = self.plugin.ui.document
+
+    local pageCount = doc:getPageCount()
+
+    local startXPointer = "/body/DocFragment[" .. index .. "]/body"
+    local endXPointer = "/body/DocFragment[" .. (index+1) .. "]/body"
+
+    local startPos = doc:getPosFromXPointer(startXPointer)
+    local endPos = doc:getPosFromXPointer(endXPointer)
+
+    if endPos == 0 then
+        -- we are at the end of the document
+        endXPointer, endPos = self:getPagePos(pageCount)
+    end
+
+    -- logger.info("KomgaSync: resource", startPos, "/", endPos, "/", startXPointer, "/", endXPointer)
+
+    return startXPointer, endXPointer, startPos, endPos
+end
+
 function KomgaSync:getPagePos(pageNumber)
     local doc = self.plugin.ui.document
     local pageXPointer = doc:getPageXPointer(pageNumber)
@@ -725,7 +728,7 @@ function KomgaSync:GetPosFromRemoteProgression(book_id, remote_progression)
     -- get book manifest
     local manifest, err = self.plugin.api:get_book_manifest(book_id)
     if not manifest then
-        logger.err("[Komga Sync] Get manifest failed: ", tostring(err))
+        logger.err("KomgaSync: Get manifest failed: ", tostring(err))
         return nil
     end
 
@@ -737,33 +740,20 @@ function KomgaSync:GetPosFromRemoteProgression(book_id, remote_progression)
             break
         end
     end
-
-    logger.info("KomgaSync: found resource index ", index)
     if not index then
-        logger.info("KomgaSync: readingOrder", manifest.readingOrder)
+        logger.err("KomgaSync: failed to find resource in readingOrder", manifest.readingOrder)
         return nil
     end
 
     -- compute pos from remote progression
     local pageCount = doc:getPageCount()
 
-    local startXPointer = "/body/DocFragment[" .. index .. "]/body"
-    local endXPointer = "/body/DocFragment[" .. (index+1) .. "]/body"
-
-    local startPos = doc:getPosFromXPointer(startXPointer)
-    local endPos = doc:getPosFromXPointer(endXPointer)
-
-    if endPos == 0 then
-        -- we are at the end of the document
-        endXPointer, endPos = self:getPagePos(pageCount)
-    end
-
-    logger.info("KomgaSync: resource", startPos, "/", endPos, "/", startXPointer, "/", endXPointer)
+    local startXPointer, endXPointer, startPos, endPos = self:getResourcePointers(index)
 
     -- compute new local pos
     local remotePos = startPos + (endPos - startPos) * remote_progression.locator.locations.progression
 
-    logger.info("KomgaSync: remote pos", remotePos)
+    -- logger.info("KomgaSync: remote pos", remotePos)
 
     -- get page from pos
     local startPage = doc:getPageFromXPointer(startXPointer)
@@ -771,7 +761,7 @@ function KomgaSync:GetPosFromRemoteProgression(book_id, remote_progression)
     local approxPage = math.floor(startPage + (endPage - startPage) * remote_progression.locator.locations.progression)
     local accuratePage = nil
 
-    logger.info("KomgaSync: approx remote page", approxPage)
+    -- logger.info("KomgaSync: approx remote page", approxPage)
 
     local currentPage = approxPage
     while not accuratePage do
@@ -815,37 +805,24 @@ end
 function KomgaSync:GetLocalProgression(book_id)
     local doc = self.plugin.ui.document
 
-
     local manifest, err = self.plugin.api:get_book_manifest(book_id)
     if not manifest then
-        logger.err("[Komga Sync] Get manifest failed: ", tostring(err))
+        logger.err("KomgaSync: Get manifest failed: ", tostring(err))
         return nil
     end
-    --logger.info("[Komga Sync] Get manifest", manifest)
 
     local lastPercent = self:getLastPercent()
     local lastProgress = self:getLastProgress()
 
-    local pageCount = doc:getPageCount()
     local xPointer = doc:getXPointer()
     local currPos = doc:getCurrentPos()
 
     local index = tonumber(xPointer:match("DocFragment%[(%d+)%]"))
-    local startXPointer = "/body/DocFragment[" .. index .. "]/body"
-    local endXPointer = "/body/DocFragment[" .. (index+1) .. "]/body"
 
-    local startPos = doc:getPosFromXPointer(startXPointer)
-    local endPos = doc:getPosFromXPointer(endXPointer)
+    local startXPointer, endXPointer, startPos, endPos = self:getResourcePointers(index)
 
-    if endPos == 0 then
-        -- we are at the end of the document
-        endXPointer = doc:getPageXPointer(pageCount)
-        endPos = doc:getPosFromXPointer(endXPointer)
-    end
-
-    logger.info("KomgaSync: resource", startPos, "/", endPos, "/", xPointer, "/", startXPointer, "/", endXPointer)
     local currPercent = (currPos - startPos) / (endPos - startPos)
-    logger.info("KomgaSync: resource", currPercent)
+    -- logger.info("KomgaSync: resource", currPercent)
 
     local hrefUrl = manifest.readingOrder[index].href
     local resource_path = hrefUrl:match(".*/resource/(.*)")
@@ -867,7 +844,6 @@ function KomgaSync:GetLocalProgression(book_id)
 
     local progressionPayload = {
         device = {id=device_id, name=chosen_device_name},
-        -- modified="2026-09-14T19:44:29.436Z",
         modified=modified,
         locator = {
             -- href="OEBPS/Text/Pratchett,Terry-%5BDisque-monde-07%5DPyramides(1989).French.ebook.AlexandriZ_split_015.html",
@@ -888,57 +864,52 @@ function KomgaSync:GetLocalProgression(book_id)
 end
 
 -- Push progress to Komga
-function KomgaSync:pushProgress(ui, ensure_networking, interactive, on_suspend)
-    if not self.plugin.api or not ui or not ui.document then return end
-    local filepath = ui.document.file
-    if not filepath then return end
-
-    -- TODO : add on_suspend and debounce logic from kosync
-
+function KomgaSync:pushProgress(book_id, ensure_networking, interactive, on_suspend)
+    -- debounce logic from kosync
     local now = UIManager:getElapsedTimeSinceBoot()
     if not interactive and now - self.push_timestamp <= API_CALL_DEBOUNCE_DELAY then
-        logger.dbg("KOSync: We've already pushed progress less than 25s ago!")
+        logger.warn("KomgaSync: We've already pushed progress less than 25s ago!")
         return
     end
 
     local doc = self.plugin.ui.document
     
-    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:pushProgress(ui, ensure_networking, interactive, on_suspend) end) then
+    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:pushProgress(book_id, ensure_networking, interactive, on_suspend) end) then
         return
     end
-
-    local book_id = self:getOrMatchBook(filepath)
-    if not book_id then return end
     
-    local current_page = ui.view and ui.view.state and ui.view.state.page or 1
-    local total_pages = ui.view and ui.view.state and ui.view.state.page_count or (ui.document and ui.document.getPageCount and ui.document:getPageCount()) or current_page
+    local current_page = self.plugin.ui.view and self.plugin.ui.view.state and self.plugin.ui.view.state.page or 1
+    local total_pages = self.plugin.ui.view and self.plugin.ui.view.state and self.plugin.ui.view.state.page_count or (self.plugin.ui.document and self.plugin.ui.document.getPageCount and self.plugin.ui.document:getPageCount()) or current_page
     
     
     logger.info("KomgaSync: Executing pushProgress for book", book_id, "page", current_page)
 
+    local success
+    local err
     local format = doc:getDocumentFormat()
     if format == "EPUB" then
         local localProgression = self:GetLocalProgression(book_id)
         if localProgression then
-            local success, err = self.plugin.api:mark_book_progression(book_id, localProgression)
-            if success then
-                logger.info("[Komga Sync] Saved progression ", localProgression)
-            else
-                logger.err("[Komga Sync] Save progression failed: " .. tostring(err))
-            end
+            success, err = self.plugin.api:mark_book_progression(book_id, localProgression)
+        else
+            success = false
+            err = "GetLocalProgression failed"
         end
     else
         local completed = current_page >= total_pages
-        local success, err = self.plugin.api:patch_read_progress(book_id, current_page, completed)
-        if success then
-            logger.info("[Komga Sync] Saved page " .. current_page)
-        else
-            logger.err("[Komga Sync] Save failed: " .. tostring(err))
-        end
+        success, err = self.plugin.api:patch_read_progress(book_id, current_page, completed)
     end
 
+    if success then
+        logger.info("KomgaSync: Saved page " .. current_page)
+    else
+        logger.err("KomgaSync: Save failed: " .. tostring(err))
+    end
+
+    -- on_suspend logic from kosync
     -- This is solely for onSuspend's sake, to clear the ghosting left by the "Connected" InfoMessage
     if on_suspend then
+
         -- Our top-level widget should be the "Connected to network" InfoMessage from NetworkMgr's reconnectOrShowNetworkMenu
         local widget = UIManager:getTopmostVisibleWidget()
         if widget and widget.modal and widget.tag == "NetworkMgr" and not widget.dismiss_callback then
@@ -948,9 +919,7 @@ function KomgaSync:pushProgress(ui, ensure_networking, interactive, on_suspend)
                 UIManager:setDirty(nil, "full")
             end
         end
-    end
 
-    if on_suspend then
         -- NOTE: We want to murder Wi-Fi once we're done in this specific case (i.e., Suspend),
         --       because some of our hasWifiManager targets will horribly implode when attempting to suspend with the Wi-Fi chip powered on,
         --       and they'll have attempted to kill Wi-Fi well before *we* run (e.g., in `Device:onPowerEvent`, *before* actually sending the Suspend Event)...
@@ -1206,12 +1175,10 @@ function KomgaSync:promptNextChapter(ui, show_native_func)
                 logger.info("KomgaSync: Updated BookList cache.")
             end)
             -- Also push the 100% progress up to the Komga server
-            self:pushProgress(ui, false, false, false)
+            self:pushProgress(book_id, false, false, false)
         end
     end
 
-    local NetworkMgr = require("ui/network/manager")
-    local UIManager = require("ui/uimanager")
     local ButtonDialog = require("ui/widget/buttondialog")
 
     if not NetworkMgr:isOnline() then
