@@ -5,14 +5,30 @@
 
 local logger = require("logger")
 local UIManager = require("ui/uimanager")
-
+local ConfirmBox = require("ui/widget/confirmbox")
+local Device = require("device")
+local Event = require("ui/event")
+local Math = require("optmath")
+local NetworkMgr = require("ui/network/manager")
 local JSON = require("json")
+local time = require("ui/time")
+
+-- Debounce push/pull attempts
+local API_CALL_DEBOUNCE_DELAY = time.s(25)
+
+local SYNC_STRATEGY = {
+    PROMPT  = 1,
+    SILENT  = 2,
+    DISABLE = 3,
+}
 
 local KomgaSync = {}
 
 function KomgaSync:new(plugin)
     local o = {
         plugin = plugin,
+        push_timestamp = 0,
+        pull_timestamp = 0,
         bg_processes = {},
         bg_collector_scheduled = false
     }
@@ -551,10 +567,17 @@ function KomgaSync:unlinkCurrentBook()
 end
 
 -- Sync progress from Komga
-function KomgaSync:pullProgress(ui, ensure_networking, is_manual)
+function KomgaSync:pullProgress(ui, ensure_networking, interactive)
     if not self.plugin.settings.use_komga_sync then return false end
     if not self.plugin.api or not ui or not ui.document then return false end
     
+    -- TODO : add debounce logic from kosync
+    local now = UIManager:getElapsedTimeSinceBoot()
+    if not interactive and now - self.pull_timestamp <= API_CALL_DEBOUNCE_DELAY then
+        logger.dbg("KOSync: We've already pulled progress less than 25s ago!")
+        return
+    end
+
     local doc = self.plugin.ui.document
     local filepath = ui.document.file
     if not filepath then return false end
@@ -564,16 +587,15 @@ function KomgaSync:pullProgress(ui, ensure_networking, is_manual)
     local T = self.plugin.i18n.T
     
     if not book_id then
-        if is_manual then self.plugin:notify(_("Click 'Match' first."), "error") end
+        if interactive then self.plugin:notify(_("Click 'Match' first."), "error") end
         return false
     end
     
-    local NetworkMgr = require("ui/network/manager")
-    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:pullProgress(ui, ensure_networking, is_manual) end) then
+    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:pullProgress(ui, ensure_networking, interactive) end) then
         return true
     end
 
-    -- if is_manual then self.plugin:notify(_("Checking server progress..."), "info") end
+    -- if interactive then self.plugin:notify(_("Checking server progress..."), "info") end
     logger.info("KomgaSync: Executing pullProgress for book", book_id)
     
     local remote_page = nil 
@@ -583,7 +605,7 @@ function KomgaSync:pullProgress(ui, ensure_networking, is_manual)
     local progress, p_err = self.plugin.api:get_read_progress(book_id)
     if p_err then 
         logger.err("KomgaSync: Failed to pull progress -", tostring(p_err))
-        if is_manual then
+        if interactive then
             self.plugin:notify(T(_("Failed to pull progress - %1"), tostring(p_err)), "error")
         end
         return false -- FAILED to get komga progress
@@ -639,40 +661,35 @@ function KomgaSync:pullProgress(ui, ensure_networking, is_manual)
     local current_page = ui.view and ui.view.state and ui.view.state.page or 1
     
     if remote_page == current_page then
-        if is_manual then self.plugin:notify(_("Already at server progress"), "info") end
+        if interactive then self.plugin:notify(_("Already at server progress"), "info") end
         return true
     end
     
-    local PluginLoader = require("pluginloader")
-    local kosync = PluginLoader:getPluginInstance("kosync")
+    local kosync = self.plugin.ui.kosync
     
     local strategy
     local text
     if remote_page > current_page then
-        strategy = (kosync and kosync.settings.sync_forward) or 1
+        strategy = (kosync and kosync.settings.sync_forward) or SYNC_STRATEGY.PROMPT
         text = T(_("Server is ahead (Page %1). Jump?"), remote_page)
     else
-        strategy = (kosync and kosync.settings.sync_backward) or 1
+        strategy = (kosync and kosync.settings.sync_backward) or SYNC_STRATEGY.PROMPT
         text = T(_("Server is behind (Page %1). Jump?"), remote_page)
     end
     
-    if strategy == 1 then -- Prompt
-        local ConfirmBox = require("ui/widget/confirmbox")
-        local UIManager = require("ui/uimanager")
-        local Event = require("ui/event")
+    if strategy == SYNC_STRATEGY.PROMPT then -- Prompt
         UIManager:show(ConfirmBox:new{
             text = text,
             ok_callback = function()
                 UIManager:broadcastEvent(Event:new("GotoPage", remote_page))
             end,
         })
-    elseif strategy == 2 then -- Silently update
-        local UIManager = require("ui/uimanager")
-        local Event = require("ui/event")
+    elseif strategy == SYNC_STRATEGY.SILENT then -- Silently update
         UIManager:broadcastEvent(Event:new("GotoPage", remote_page))
-        if is_manual then self.plugin:notify(T(_("Jumped to Page %1"), remote_page), "info") end
+        if interactive then self.plugin:notify(T(_("Jumped to Page %1"), remote_page), "info") end
     end
     
+    self.pull_timestamp = now
     return true
 end
 
@@ -843,9 +860,7 @@ function KomgaSync:GetLocalProgression(book_id)
 
 
     -- kosync is nil when doing automatic sync
-    local Device = require("device")
-    local PluginLoader = require("pluginloader")
-    local kosync = PluginLoader:getPluginInstance("kosync")
+    local kosync = self.plugin.ui.kosync
 
     local chosen_device_name = (kosync and kosync.settings.kosync_hostname) or Device.model
     local device_id = (kosync and kosync.device_id) or "" 
@@ -878,9 +893,16 @@ function KomgaSync:pushProgress(ui, ensure_networking, interactive, on_suspend)
     local filepath = ui.document.file
     if not filepath then return end
 
+    -- TODO : add on_suspend and debounce logic from kosync
+
+    local now = UIManager:getElapsedTimeSinceBoot()
+    if not interactive and now - self.push_timestamp <= API_CALL_DEBOUNCE_DELAY then
+        logger.dbg("KOSync: We've already pushed progress less than 25s ago!")
+        return
+    end
+
     local doc = self.plugin.ui.document
     
-    local NetworkMgr = require("ui/network/manager")
     if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:pushProgress(ui, ensure_networking, interactive, on_suspend) end) then
         return
     end
@@ -914,6 +936,30 @@ function KomgaSync:pushProgress(ui, ensure_networking, interactive, on_suspend)
             logger.err("[Komga Sync] Save failed: " .. tostring(err))
         end
     end
+
+    -- This is solely for onSuspend's sake, to clear the ghosting left by the "Connected" InfoMessage
+    if on_suspend then
+        -- Our top-level widget should be the "Connected to network" InfoMessage from NetworkMgr's reconnectOrShowNetworkMenu
+        local widget = UIManager:getTopmostVisibleWidget()
+        if widget and widget.modal and widget.tag == "NetworkMgr" and not widget.dismiss_callback then
+            -- We want a full-screen flash on dismiss
+            widget.dismiss_callback = function()
+                -- Enqueued, because we run before the InfoMessage's close
+                UIManager:setDirty(nil, "full")
+            end
+        end
+    end
+
+    if on_suspend then
+        -- NOTE: We want to murder Wi-Fi once we're done in this specific case (i.e., Suspend),
+        --       because some of our hasWifiManager targets will horribly implode when attempting to suspend with the Wi-Fi chip powered on,
+        --       and they'll have attempted to kill Wi-Fi well before *we* run (e.g., in `Device:onPowerEvent`, *before* actually sending the Suspend Event)...
+        if Device:hasWifiManager() then
+            NetworkMgr:disableWifi()
+        end
+    end
+
+    self.push_timestamp = now
 end
 
 -- Helper to check if a filename has a valid (non-numeric) file extension

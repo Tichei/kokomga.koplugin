@@ -367,7 +367,7 @@ function KomgaPlugin:onReaderReady()
         self.orig_kosync_getProgress = self.ui.kosync.getProgress
         
         self.ui.kosync.getProgress = function(kosync_instance, ensure_networking, interactive)
-            logger.info("KomgaPlugin: Intercepted KOSync:getProgress (ensure_networking=" .. tostring(ensure_networking) .. ")")
+            logger.info("KomgaPlugin: Intercepted KOSync:getProgress (ensure_networking=", ensure_networking, "interactive=", interactive, ")")
             
             local current_filepath = self.ui.document and self.ui.document.file
             local book_id = current_filepath and self.sync:getOrMatchBook(current_filepath)
@@ -392,7 +392,7 @@ function KomgaPlugin:onReaderReady()
         self.orig_kosync_updateProgress = self.ui.kosync.updateProgress
         
         self.ui.kosync.updateProgress = function(kosync_instance, ensure_networking, interactive, on_suspend)
-            logger.info("KomgaPlugin: Intercepted KOSync:updateProgress (ensure_networking=" .. tostring(ensure_networking) .. ")")
+            logger.info("KomgaPlugin: Intercepted KOSync:updateProgress (ensure_networking=", ensure_networking, "interactive=", interactive, "on_suspend=", on_suspend, ")")
             local current_filepath = self.ui.document and self.ui.document.file
             if current_filepath then
                 local book_id = self.sync:getOrMatchBook(current_filepath)
