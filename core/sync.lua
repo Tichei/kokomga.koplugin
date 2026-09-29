@@ -609,7 +609,7 @@ function KomgaSync:pullProgress(book_id, ensure_networking, interactive)
         return true -- Server responded successfully but 0% progress
     end
 
-    local format = doc:getDocumentFormat()
+    local format = doc.getDocumentFormat and doc:getDocumentFormat()
     if format == "EPUB" then
 
         if progress.completed then
@@ -880,14 +880,14 @@ function KomgaSync:pushProgress(book_id, ensure_networking, interactive, on_susp
     
     local current_page = self.plugin.ui.view and self.plugin.ui.view.state and self.plugin.ui.view.state.page or 1
     local total_pages = self.plugin.ui.view and self.plugin.ui.view.state and self.plugin.ui.view.state.page_count or (self.plugin.ui.document and self.plugin.ui.document.getPageCount and self.plugin.ui.document:getPageCount()) or current_page
-    
+    local completed = current_page >= total_pages
     
     logger.info("KomgaSync: Executing pushProgress for book", book_id, "page", current_page)
 
     local success
     local err
-    local format = doc:getDocumentFormat()
-    if format == "EPUB" then
+    local format = doc.getDocumentFormat and doc:getDocumentFormat()
+    if format == "EPUB" and not completed then
         local localProgression = self:GetLocalProgression(book_id)
         if localProgression then
             success, err = self.plugin.api:mark_book_progression(book_id, localProgression)
@@ -896,7 +896,6 @@ function KomgaSync:pushProgress(book_id, ensure_networking, interactive, on_susp
             err = "GetLocalProgression failed"
         end
     else
-        local completed = current_page >= total_pages
         success, err = self.plugin.api:patch_read_progress(book_id, current_page, completed)
     end
 
